@@ -152,7 +152,7 @@ async fn concurrent_connections() {
         .expect("disabling fail point should succeed");
 }
 
-#[cfg_attr(feature = "tokio-runtime", tokio::test(threaded_scheduler))]
+#[cfg_attr(feature = "tokio-runtime", tokio::test(flavor = "multi_thread"))]
 #[cfg_attr(feature = "async-std-runtime", async_std::test)]
 #[function_name::named]
 async fn connection_error_during_establishment() {
@@ -200,7 +200,7 @@ async fn connection_error_during_establishment() {
         .expect("closed event with error reason should have been seen");
 }
 
-#[cfg_attr(feature = "tokio-runtime", tokio::test(threaded_scheduler))]
+#[cfg_attr(feature = "tokio-runtime", tokio::test(flavor = "multi_thread"))]
 #[cfg_attr(feature = "async-std-runtime", async_std::test)]
 #[function_name::named]
 async fn connection_error_during_operation() {
