@@ -1,6 +1,12 @@
-use std::{future::Future, net::SocketAddr, time::Duration};
+use std::{
+    future::Future,
+    net::SocketAddr,
+    task::{Context, Poll},
+    time::Duration,
+};
 
 use async_trait::async_trait;
+use tokio::io::ReadBuf;
 use trust_dns_proto::error::ProtoError;
 use trust_dns_resolver::{
     config::ResolverConfig,
@@ -29,10 +35,8 @@ pub(crate) struct AsyncResolver {
 impl AsyncResolver {
     pub(crate) async fn new(config: Option<ResolverConfig>) -> Result<Self> {
         let resolver = match config {
-            Some(config) => {
-                TrustDnsResolver::new(config, Default::default(), crate::RUNTIME).await?
-            }
-            None => TrustDnsResolver::from_system_conf(crate::RUNTIME).await?,
+            Some(config) => TrustDnsResolver::new(config, Default::default(), crate::RUNTIME)?,
+            None => TrustDnsResolver::from_system_conf(crate::RUNTIME)?,
         };
         Ok(Self { resolver })
     }
@@ -90,12 +94,14 @@ impl trust_dns_resolver::name_server::Spawn for AsyncRuntime {
     }
 }
 
+impl trust_dns_proto::tcp::DnsTcpStream for AsyncTcpStream {
+    type Time = AsyncRuntime;
+}
+
 #[async_trait]
 impl trust_dns_proto::tcp::Connect for AsyncTcpStream {
-    type Transport = Self;
-
     /// connect to tcp
-    async fn connect(addr: SocketAddr) -> std::io::Result<Self::Transport> {
+    async fn connect(addr: SocketAddr) -> std::io::Result<Self> {
         AsyncTcpStream::connect_socket_addr(&addr, None)
             .await
             .map_err(Error::into_io_error)
@@ -114,7 +120,9 @@ enum AsyncUdpSocket {
 
 #[async_trait]
 impl trust_dns_proto::udp::UdpSocket for AsyncUdpSocket {
-    async fn bind(addr: &SocketAddr) -> std::io::Result<Self> {
+    type Time = AsyncRuntime;
+
+    async fn bind(addr: SocketAddr) -> std::io::Result<Self> {
         #[cfg(feature = "tokio-runtime")]
         use tokio::net::UdpSocket;
 
@@ -125,26 +133,38 @@ impl trust_dns_proto::udp::UdpSocket for AsyncUdpSocket {
         Ok(socket.into())
     }
 
-    /// Receive data from the socket and returns the number of bytes read and the address from
-    /// where the data came on success.
-    async fn recv_from(&mut self, buf: &mut [u8]) -> std::io::Result<(usize, SocketAddr)> {
+    fn poll_recv_from(
+        &self,
+        cx: &mut Context<'_>,
+        buf: &mut [u8],
+    ) -> Poll<std::io::Result<(usize, SocketAddr)>> {
         match self {
             #[cfg(feature = "tokio-runtime")]
-            AsyncUdpSocket::Tokio(ref mut socket) => socket.recv_from(buf).await,
+            AsyncUdpSocket::Tokio(ref socket) => {
+                let mut readbuf = ReadBuf::new(buf);
+
+                socket
+                    .poll_recv_from(cx, &mut readbuf)
+                    .map(|x| x.map(|y| (readbuf.filled().len(), y)))
+            }
 
             #[cfg(feature = "async-std-runtime")]
-            AsyncUdpSocket::AsyncStd(ref mut socket) => socket.recv_from(buf).await,
+            AsyncUdpSocket::AsyncStd(ref socket) => socket.recv_from(buf).await,
         }
     }
 
-    /// Send data to the given address.
-    async fn send_to(&mut self, buf: &[u8], target: &SocketAddr) -> std::io::Result<usize> {
+    fn poll_send_to(
+        &self,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+        target: SocketAddr,
+    ) -> Poll<std::io::Result<usize>> {
         match self {
             #[cfg(feature = "tokio-runtime")]
-            AsyncUdpSocket::Tokio(ref mut socket) => socket.send_to(buf, target).await,
+            AsyncUdpSocket::Tokio(ref socket) => socket.poll_send_to(cx, buf, target),
 
             #[cfg(feature = "async-std-runtime")]
-            AsyncUdpSocket::AsyncStd(ref mut socket) => socket.send_to(buf, target).await,
+            AsyncUdpSocket::AsyncStd(ref socket) => socket.send_to(buf, target).await,
         }
     }
 }
