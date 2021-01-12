@@ -88,9 +88,19 @@ impl AsyncTcpStream {
 
     #[cfg(feature = "tokio-runtime")]
     async fn try_connect(address: &SocketAddr, connect_timeout: Duration) -> Result<Self> {
-        use tokio::net::TcpStream;
+        use tokio::{net::TcpStream, time::timeout};
 
-        let stream = TcpStream::from_std(Self::try_connect_common(address, connect_timeout)?)?;
+        let stream_future = TcpStream::connect(address);
+
+        let stream = if connect_timeout == Duration::from_secs(0) {
+            stream_future.await?
+        } else {
+            timeout(connect_timeout, stream_future).await??
+        };
+
+        // stream.as_ref().set_keepalive(Some(KEEPALIVE_TIME))?;
+        stream.set_nodelay(true)?;
+
         Ok(stream.into())
     }
 
@@ -287,9 +297,7 @@ impl TokioAsyncRead for AsyncTcpStream {
     ) -> Poll<tokio::io::Result<()>> {
         return match self.deref_mut() {
             #[cfg(feature = "tokio-runtime")]
-            Self::Tokio(ref mut stream) => {
-                Pin::new(stream).poll_read(cx, buf)
-           },
+            Self::Tokio(ref mut stream) => Pin::new(stream).poll_read(cx, buf),
             #[cfg(feature = "async-std-runtime")]
             Self::AsyncStd(ref mut stream) => {
                 let s = buf.initialize_unfilled();
@@ -301,7 +309,7 @@ impl TokioAsyncRead for AsyncTcpStream {
                 buf.advance(bread);
                 Poll::Ready(Ok(()))
             }
-        }
+        };
     }
 }
 
