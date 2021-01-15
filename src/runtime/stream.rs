@@ -98,7 +98,9 @@ impl AsyncTcpStream {
             timeout(connect_timeout, stream_future).await??
         };
 
-        // stream.as_ref().set_keepalive(Some(KEEPALIVE_TIME))?;
+        let socket: socket2::Socket = stream.into_std()?.into();
+        socket.set_keepalive(Some(KEEPALIVE_TIME))?;
+        let stream = TcpStream::from_std(socket.into())?;
         stream.set_nodelay(true)?;
 
         Ok(stream.into())
